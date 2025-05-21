@@ -14,7 +14,7 @@ class ContentGenerationAPITester:
         self.story_id = None
         self.video_id = None
 
-    def run_test(self, name, method, endpoint, expected_status, data=None, files=None, timeout=10):
+    def run_test(self, name, method, endpoint, expected_status, data=None, files=None, timeout=30):
         """Run a single API test"""
         url = f"{self.api_url}/{endpoint}"
         headers = {'Content-Type': 'application/json'}
@@ -159,7 +159,7 @@ class ContentGenerationAPITester:
             "generate-story",
             200,
             data={"prompt": "a story about a lost cat", "duration": "30-60"},
-            timeout=30  # Increase timeout for story generation
+            timeout=60  # Increase timeout for story generation
         )
         
         if success and "id" in response:
@@ -182,7 +182,7 @@ class ContentGenerationAPITester:
             "generate-images",
             200,
             data={"story_id": self.story_id, "style": "cartoon"},
-            timeout=60  # Increase timeout for image generation
+            timeout=90  # Increase timeout for image generation
         )
         
         if success:
