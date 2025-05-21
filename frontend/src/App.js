@@ -233,6 +233,8 @@ const StepOne = ({ onComplete }) => {
 const StepTwo = ({ story, onComplete, onBack }) => {
   const [selectedStyle, setSelectedStyle] = useState("realistic");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState(null);
   
   const styles = [
     { id: "realistic", name: "Realistic", description: "Photo-realistic imagery" },
@@ -243,24 +245,59 @@ const StepTwo = ({ story, onComplete, onBack }) => {
     { id: "neon", name: "Neon", description: "Cyberpunk neon-lit urban" }
   ];
   
+  // Poll for image generation progress
+  useEffect(() => {
+    let interval;
+    
+    if (isGenerating) {
+      interval = setInterval(async () => {
+        try {
+          const response = await axios.get(`${API}/story/${story.id}`);
+          if (response.data.image_generation_progress) {
+            setProgress(response.data.image_generation_progress);
+          }
+          
+          if (response.data.image_generation_complete) {
+            clearInterval(interval);
+            setIsGenerating(false);
+            if (response.data.images && response.data.images.length > 0) {
+              onComplete({
+                ...story,
+                images: response.data.images,
+                style: response.data.style
+              });
+              toast.success("Images generated successfully!");
+            }
+          }
+        } catch (error) {
+          console.error("Error checking image generation progress:", error);
+        }
+      }, 2000);
+    }
+    
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isGenerating, story.id, onComplete, story]);
+  
   const handleGenerate = async () => {
     setIsGenerating(true);
+    setProgress(0);
+    setError(null);
     
     try {
-      const response = await axios.post(`${API}/generate-images`, {
+      // Start the image generation process
+      await axios.post(`${API}/generate-images`, {
         story_id: story.id,
         style: selectedStyle
       });
       
-      onComplete({
-        ...story,
-        images: response.data.image_urls
-      });
-      toast.success("Images generated successfully!");
+      // Polling for progress is handled by the useEffect hook
+      toast.info("Image generation started. This may take a few minutes...");
     } catch (error) {
       console.error("Error generating images:", error);
+      setError(error.response?.data?.detail || "Failed to generate images");
       toast.error(error.response?.data?.detail || "Failed to generate images");
-    } finally {
       setIsGenerating(false);
     }
   };
@@ -282,6 +319,7 @@ const StepTwo = ({ story, onComplete, onBack }) => {
               key={style.id}
               onClick={() => setSelectedStyle(style.id)}
               className={`p-4 rounded-lg text-left ${selectedStyle === style.id ? 'bg-blue-600 border border-blue-500' : 'bg-gray-700 border border-gray-600'}`}
+              disabled={isGenerating}
             >
               <div className="font-bold mb-1">{style.name}</div>
               <div className="text-sm text-gray-300">{style.description}</div>
@@ -290,10 +328,37 @@ const StepTwo = ({ story, onComplete, onBack }) => {
         </div>
       </div>
       
+      {isGenerating && (
+        <div className="mb-6">
+          <h3 className="text-lg font-semibold mb-2 text-white">Generating Images...</h3>
+          <div className="w-full bg-gray-700 rounded-full h-4">
+            <div 
+              className="bg-blue-600 h-4 rounded-full pulse"
+              style={{ width: `${progress}%` }}
+            ></div>
+          </div>
+          <p className="text-gray-300 mt-2 text-center">
+            {progress > 0 ? `${Math.round(progress)}% complete` : 'Starting image generation...'}
+          </p>
+          <p className="text-gray-300 mt-2 text-center text-sm">
+            This may take several minutes. DALL-E is creating high-quality images for your story.
+          </p>
+        </div>
+      )}
+      
+      {error && (
+        <div className="mb-6 p-4 bg-red-900 text-white rounded-lg">
+          <h3 className="font-semibold mb-2">Error</h3>
+          <p>{error}</p>
+          <p className="mt-2 text-sm">You can try again with a different style or fewer images.</p>
+        </div>
+      )}
+      
       <div className="flex justify-between">
         <button 
           className="py-2 px-4 bg-gray-700 text-white font-semibold rounded-md hover:bg-gray-600"
           onClick={onBack}
+          disabled={isGenerating}
         >
           Back
         </button>
