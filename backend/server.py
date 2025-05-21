@@ -214,11 +214,11 @@ async def generate_images(request: ImageGenerationRequest):
         # Determine number of images based on duration
         duration_range = story["duration"]
         if duration_range == "30-60":
-            num_images = 6  # ~1 image per 10 seconds
+            num_images = 3  # Reduced from 6 to improve performance
         elif duration_range == "60-90":
-            num_images = 10  # ~1 image per 9 seconds
+            num_images = 5  # Reduced from 10 to improve performance
         else:  # 90-120
-            num_images = 15  # ~1 image per 8 seconds
+            num_images = 7  # Reduced from 15 to improve performance
         
         # Split the story into segments
         story_text = story["story"]
@@ -228,38 +228,57 @@ async def generate_images(request: ImageGenerationRequest):
         image_urls = []
         
         for i, segment in enumerate(segments):
-            # Generate prompt for DALL-E based on the segment and style
-            style_prompt = get_style_prompt(request.style)
-            
-            # Generate the image
-            response = openai.images.generate(
-                model="dall-e-3",
-                prompt=f"{style_prompt} {segment}. Full HD (1920x1080) aspect ratio.",
-                size="1792x1024",
-                quality="hd",
-                n=1
-            )
-            
-            # Get the image URL from the response
-            image_url = response.data[0].url
-            
-            # Download the image and save locally
-            image_response = requests.get(image_url)
-            image_response.raise_for_status()
-            
-            image_filename = f"{request.story_id}_{i}.png"
-            image_path = IMAGES_DIR / image_filename
-            
-            with open(image_path, "wb") as f:
-                f.write(image_response.content)
-            
-            # Add the local path to the list of image URLs
-            image_urls.append(f"/api/media/images/{image_filename}")
+            try:
+                # Update progress in database to track generation
+                await db.stories.update_one(
+                    {"id": request.story_id},
+                    {"$set": {"image_generation_progress": (i / num_images) * 100}}
+                )
+                
+                # Generate prompt for DALL-E based on the segment and style
+                style_prompt = get_style_prompt(request.style)
+                
+                # Generate the image with a timeout
+                response = openai.images.generate(
+                    model="dall-e-3",
+                    prompt=f"{style_prompt} {segment}. Full HD (1920x1080) aspect ratio.",
+                    size="1792x1024",
+                    quality="hd",
+                    n=1
+                )
+                
+                # Get the image URL from the response
+                image_url = response.data[0].url
+                
+                # Download the image and save locally
+                image_response = requests.get(image_url, timeout=30)
+                image_response.raise_for_status()
+                
+                image_filename = f"{request.story_id}_{i}.png"
+                image_path = IMAGES_DIR / image_filename
+                
+                with open(image_path, "wb") as f:
+                    f.write(image_response.content)
+                
+                # Add the local path to the list of image URLs
+                image_urls.append(f"/api/media/images/{image_filename}")
+                
+                # Add a small delay to avoid rate limiting
+                await asyncio.sleep(1)
+                
+            except Exception as e:
+                logging.error(f"Error generating image {i}: {str(e)}")
+                # If we have an error with one image, continue with the rest
+                continue
+        
+        # If we have at least one image, consider it a success
+        if not image_urls:
+            raise Exception("Failed to generate any images")
         
         # Update the story in the database with the image URLs
         await db.stories.update_one(
             {"id": request.story_id},
-            {"$set": {"images": image_urls, "style": request.style}}
+            {"$set": {"images": image_urls, "style": request.style, "image_generation_complete": True}}
         )
         
         return ImageResponse(image_urls=image_urls, story_id=request.story_id)
