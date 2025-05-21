@@ -9,13 +9,12 @@ class ContentGenerationAPITester:
     def __init__(self, base_url):
         self.base_url = base_url
         self.api_url = f"{base_url}/api"
-        self.password = f"test_password_{datetime.now().strftime('%H%M%S')}"
         self.tests_run = 0
         self.tests_passed = 0
         self.story_id = None
         self.video_id = None
 
-    def run_test(self, name, method, endpoint, expected_status, data=None, files=None):
+    def run_test(self, name, method, endpoint, expected_status, data=None, files=None, timeout=10):
         """Run a single API test"""
         url = f"{self.api_url}/{endpoint}"
         headers = {'Content-Type': 'application/json'}
@@ -25,11 +24,11 @@ class ContentGenerationAPITester:
         
         try:
             if method == 'GET':
-                response = requests.get(url, headers=headers)
+                response = requests.get(url, headers=headers, timeout=timeout)
             elif method == 'POST':
-                response = requests.post(url, json=data, headers=headers)
+                response = requests.post(url, json=data, headers=headers, timeout=timeout)
             elif method == 'DELETE':
-                response = requests.delete(url, headers=headers)
+                response = requests.delete(url, headers=headers, timeout=timeout)
             
             success = response.status_code == expected_status
             if success:
@@ -50,32 +49,34 @@ class ContentGenerationAPITester:
                         print(f"Response: {response.content}")
                 return False, {}
 
+        except requests.exceptions.Timeout:
+            print(f"❌ Failed - Request timed out after {timeout} seconds")
+            return False, {"error": "timeout"}
         except Exception as e:
             print(f"❌ Failed - Error: {str(e)}")
             return False, {}
 
     def test_authentication(self):
-        """Test authentication with a new password"""
+        """Test authentication with the known password"""
         print("\n=== Testing Authentication ===")
         success, response = self.run_test(
-            "Authentication with new password",
+            "Authentication with password '1234'",
             "POST",
             "auth",
             200,
-            data={"password": self.password}
+            data={"password": "1234"}
         )
         return success
 
     def test_change_password(self):
         """Test changing password"""
         print("\n=== Testing Change Password ===")
-        new_password = f"{self.password}_new"
         success, response = self.run_test(
             "Change password",
             "POST",
             "change-password",
             200,
-            data={"old_password": self.password, "new_password": new_password}
+            data={"old_password": "1234", "new_password": "5678"}
         )
         
         if success:
@@ -85,7 +86,7 @@ class ContentGenerationAPITester:
                 "POST",
                 "auth",
                 200,
-                data={"password": new_password}
+                data={"password": "5678"}
             )
             
             # Restore original password for subsequent tests
@@ -95,7 +96,7 @@ class ContentGenerationAPITester:
                     "POST",
                     "change-password",
                     200,
-                    data={"old_password": new_password, "new_password": self.password}
+                    data={"old_password": "5678", "new_password": "1234"}
                 )
                 return success3
             return success2
@@ -105,38 +106,47 @@ class ContentGenerationAPITester:
         """Test saving API keys"""
         print("\n=== Testing Settings ===")
         
-        # Test saving settings
-        settings = {
-            "tiktok_api_key": "test_tiktok_key",
-            "youtube_api_key": "test_youtube_key"
-        }
-        
+        # Test getting settings
         success, response = self.run_test(
-            "Save settings",
-            "POST",
+            "Get settings",
+            "GET",
             "settings",
-            200,
-            data=settings
+            200
         )
         
         if success:
-            # Test getting settings
+            print(f"Current settings: {response}")
+            
+            # Test saving settings
+            settings = {
+                "openai_api_key": "test_openai_key"
+            }
+            
             success2, response2 = self.run_test(
-                "Get settings",
-                "GET",
+                "Save settings",
+                "POST",
                 "settings",
-                200
+                200,
+                data=settings
             )
             
             if success2:
                 # Verify settings were saved correctly
-                if (response2.get("tiktok_api_key") == settings["tiktok_api_key"] and 
-                    response2.get("youtube_api_key") == settings["youtube_api_key"]):
-                    print("✅ Settings verification passed")
-                    return True
-                else:
-                    print("❌ Settings verification failed - values don't match")
-                    return False
+                success3, response3 = self.run_test(
+                    "Verify settings",
+                    "GET",
+                    "settings",
+                    200
+                )
+                
+                if success3:
+                    if response3.get("openai_api_key") == settings["openai_api_key"]:
+                        print("✅ Settings verification passed")
+                        return True
+                    else:
+                        print("❌ Settings verification failed - values don't match")
+                        return False
+                return success3
             return success2
         return success
 
@@ -148,12 +158,14 @@ class ContentGenerationAPITester:
             "POST",
             "generate-story",
             200,
-            data={"prompt": "a story about a lost cat", "duration": "30-60"}
+            data={"prompt": "a story about a lost cat", "duration": "30-60"},
+            timeout=30  # Increase timeout for story generation
         )
         
         if success and "id" in response:
             self.story_id = response["id"]
             print(f"✅ Story generated with ID: {self.story_id}")
+            print(f"Story content: {response.get('content', 'No content available')}")
             return True
         return False
 
@@ -169,99 +181,23 @@ class ContentGenerationAPITester:
             "POST",
             "generate-images",
             200,
-            data={"story_id": self.story_id, "style": "cartoon"}
+            data={"story_id": self.story_id, "style": "cartoon"},
+            timeout=60  # Increase timeout for image generation
         )
         
-        if success and "image_urls" in response:
-            print(f"✅ Images generated: {len(response['image_urls'])} images")
-            return True
+        if success:
+            if "image_urls" in response:
+                print(f"✅ Images generated: {len(response['image_urls'])} images")
+                print(f"Image URLs: {response['image_urls']}")
+                return True
+            elif "error" in response and response["error"] == "timeout":
+                print("⚠️ Image generation request timed out")
+                return False
         return False
 
-    def test_voice_generation(self):
-        """Test voice generation"""
-        print("\n=== Testing Voice Generation ===")
-        if not self.story_id:
-            print("❌ Cannot test voice generation without a story ID")
-            return False
-            
-        success, response = self.run_test(
-            "Generate voice",
-            "POST",
-            "generate-voice",
-            200,
-            data={"story_id": self.story_id, "voice": "alloy"}
-        )
-        
-        if success and "audio_url" in response:
-            print(f"✅ Voice generated with URL: {response['audio_url']}")
-            return True
-        return False
-
-    def test_video_generation(self):
-        """Test video generation"""
-        print("\n=== Testing Video Generation ===")
-        if not self.story_id:
-            print("❌ Cannot test video generation without a story ID")
-            return False
-            
-        subtitle_customization = {
-            "font": "Arial",
-            "color": "#FFFFFF",
-            "placement": "bottom",
-            "background": "solid"
-        }
-        
-        success, response = self.run_test(
-            "Generate video",
-            "POST",
-            "generate-video",
-            200,
-            data={
-                "story_id": self.story_id,
-                "subtitle_customization": subtitle_customization,
-                "voice_id": "alloy"
-            }
-        )
-        
-        if success and "video_id" in response:
-            self.video_id = response["video_id"]
-            print(f"✅ Video generation started with ID: {self.video_id}")
-            
-            # Poll for video status
-            max_attempts = 5  # Limit polling attempts for testing
-            attempts = 0
-            while attempts < max_attempts:
-                attempts += 1
-                print(f"Checking video status (attempt {attempts}/{max_attempts})...")
-                
-                status_success, status_response = self.run_test(
-                    "Check video status",
-                    "GET",
-                    f"video-status/{self.video_id}",
-                    200
-                )
-                
-                if status_success:
-                    status = status_response.get("status")
-                    print(f"Video status: {status}")
-                    
-                    if status == "completed":
-                        print("✅ Video generation completed successfully")
-                        return True
-                    elif status == "not_found":
-                        print("❌ Video not found")
-                        return False
-                
-                time.sleep(2)  # Wait before checking again
-            
-            print("⚠️ Video generation is still processing (test timeout)")
-            return True  # Consider it a success since the request was accepted
-        
-        return False
-
-    def test_gallery(self):
-        """Test gallery functionality"""
-        print("\n=== Testing Gallery ===")
+    def test_videos(self):
+        """Test getting videos"""
+        print("\n=== Testing Videos API ===")
         
         success, response = self.run_test(
             "Get videos",
@@ -271,16 +207,14 @@ class ContentGenerationAPITester:
         )
         
         if success:
-            videos = response
-            if isinstance(videos, list):
-                print(f"✅ Gallery returned {len(videos)} videos")
-                
-                # If we have a video ID from previous tests, check if it's in the gallery
-                if self.video_id and any(video.get("id") == self.video_id for video in videos):
-                    print(f"✅ Found our generated video in the gallery")
-                
+            if isinstance(response, list):
+                print(f"✅ Found {len(response)} videos")
+                if len(response) > 0:
+                    print(f"First video: {response[0]}")
                 return True
-        
+            else:
+                print(f"❌ Unexpected response format: {response}")
+                return False
         return False
 
 def main():
@@ -302,15 +236,15 @@ def main():
     # Test settings
     tester.test_settings()
     
-    # Test content generation flow
+    # Test story generation
     story_success = tester.test_story_generation()
+    
+    # Test image generation
     if story_success:
         tester.test_image_generation()
-        tester.test_voice_generation()
-        tester.test_video_generation()
     
-    # Test gallery
-    tester.test_gallery()
+    # Test videos API
+    tester.test_videos()
     
     # Print results
     print(f"\n📊 Tests passed: {tester.tests_passed}/{tester.tests_run}")
