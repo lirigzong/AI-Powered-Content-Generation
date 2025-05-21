@@ -384,6 +384,13 @@ async def delete_video(video_id: str):
     
     return {"message": "Video deleted successfully"}
 
+@api_router.get("/story/{story_id}")
+async def get_story_details(story_id: str):
+    story = await get_story(story_id)
+    if "_id" in story:
+        del story["_id"]
+    return story
+
 @api_router.get("/media/images/{filename}")
 async def get_image(filename: str):
     image_path = IMAGES_DIR / filename
